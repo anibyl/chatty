@@ -200,7 +200,7 @@ public class Channel extends JPanel {
     
     @Override
     public String getName() {
-        return room.getDisplayName();
+        return room != null ? room.getDisplayName() : null;
     }
     
     public String getOwnerChannel() {
@@ -563,16 +563,9 @@ public class Channel extends JPanel {
     public boolean requestFocusInWindow() {
         // Invoke later, because otherwise it wouldn't get focus for some
         // reason.
-        
-        // Commented out for testing
-//        SwingUtilities.invokeLater(new Runnable() {
-//
-//            @Override
-//            public void run() {
-//                //System.out.println("requesting focus for " + name);
-//                input.requestFocusInWindow();
-//            }
-//        });
+        SwingUtilities.invokeLater(() -> {
+            input.requestFocusInWindow();
+        });
         return input.requestFocusInWindow();
         
     }

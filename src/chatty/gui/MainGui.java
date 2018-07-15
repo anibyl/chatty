@@ -57,6 +57,8 @@ import chatty.gui.components.settings.NotificationSettings;
 import chatty.gui.components.settings.SettingsDialog;
 import chatty.gui.components.textpane.AutoModMessage;
 import chatty.gui.components.textpane.SubscriberMessage;
+import chatty.gui.components.textpane.UserNotice;
+import chatty.gui.components.userinfo.UserInfoManager;
 import chatty.gui.notifications.Notification;
 import chatty.gui.notifications.NotificationActionListener;
 import chatty.gui.notifications.NotificationManager;
@@ -91,6 +93,7 @@ import javax.swing.JFrame;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
+import javax.swing.ToolTipManager;
 import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
 import javax.swing.event.MenuEvent;
@@ -124,7 +127,7 @@ public class MainGui extends JFrame implements Runnable {
     private TokenDialog tokenDialog;
     private TokenGetDialog tokenGetDialog;
     private DebugWindow debugWindow;
-    private UserInfo userInfoDialog;
+    private UserInfoManager userInfoDialog;
     private About aboutDialog;
     private ChannelInfoDialog channelInfoDialog;
     private SettingsDialog settingsDialog;
@@ -240,8 +243,7 @@ public class MainGui extends JFrame implements Runnable {
         GuiUtil.installEscapeCloseOperation(connectionDialog);
         tokenDialog = new TokenDialog(this);
         tokenGetDialog = new TokenGetDialog(this);
-        userInfoDialog = new UserInfo(this, client.settings, contextMenuListener);
-        GuiUtil.installEscapeCloseOperation(userInfoDialog);
+        userInfoDialog = new UserInfoManager(this, client.settings, contextMenuListener);
         aboutDialog = new About();
         setHelpWindowIcons();
         channelInfoDialog = new ChannelInfoDialog(this);
@@ -315,7 +317,6 @@ public class MainGui extends JFrame implements Runnable {
         state.update();
         addListeners();
         pack();
-        setLocationByPlatform(true);
         
         // Load some stuff
         client.api.setUserId(client.settings.getString("username"), client.settings.getString("userid"));
@@ -328,11 +329,11 @@ public class MainGui extends JFrame implements Runnable {
         if (client.settings.getBoolean("bttvEmotes")) {
             client.bttvEmotes.requestEmotes("$global$", false);
         }
+        OtherBadges.requestBadges(r -> client.usericonManager.setThirdPartyIcons(r), false);
         
         // Window states
         windowStateManager = new WindowStateManager(this, client.settings);
         windowStateManager.addWindow(this, "main", true, true);
-        windowStateManager.setPrimaryWindow(this);
         windowStateManager.addWindow(highlightedMessages, "highlights", true, true);
         windowStateManager.addWindow(ignoredMessages, "ignoredMessages", true, true);
         windowStateManager.addWindow(channelInfoDialog, "channelInfo", true, true);
@@ -344,7 +345,7 @@ public class MainGui extends JFrame implements Runnable {
         windowStateManager.addWindow(subscribersDialog, "subscribers", true, true);
         windowStateManager.addWindow(moderationLog, "moderationLog", true, true);
         windowStateManager.addWindow(streamChat, "streamChat", true, true);
-        windowStateManager.addWindow(userInfoDialog, "userInfo", true, false);
+        windowStateManager.addWindow(userInfoDialog.getDummyWindow(), "userInfo", true, false);
         windowStateManager.addWindow(autoModDialog, "autoMod", true, true);
         
         if (System.getProperty("java.version").equals("1.8.0_161")
@@ -352,7 +353,14 @@ public class MainGui extends JFrame implements Runnable {
             GuiUtil.installTextComponentFocusWorkaround();
         }
         
+        ToolTipManager.sharedInstance().setInitialDelay(300);
+        ToolTipManager.sharedInstance().setDismissDelay(20*1000);
+        
         guiCreated = true;
+    }
+    
+    public void setWindowAttached(Window window, boolean attached) {
+        windowStateManager.setWindowAttached(window, attached);
     }
     
     protected void popoutCreated(JDialog popout) {
@@ -780,8 +788,17 @@ public class MainGui extends JFrame implements Runnable {
                     return;
                 }
                 channels.setInitialFocus();
+                
+                windowStateManager.loadWindowStates();
+                windowStateManager.setWindowPosition(MainGui.this);
                 setVisible(true);
                 
+                // If not invokeLater() seemed to move dialogs on start when
+                // maximized and not restoring location due to off-screen
+                SwingUtilities.invokeLater(() -> {
+                    windowStateManager.setAttachedWindowsEnabled(client.settings.getBoolean("attachedWindows"));
+                });
+
                 // Should be done when the main window is already visible, so
                 // it can be centered on it correctly, if that is necessary
                 reopenWindows();
@@ -871,10 +888,7 @@ public class MainGui extends JFrame implements Runnable {
         updateConnectionDialog(null);
         userInfoDialog.setUserDefinedButtonsDef(client.settings.getString("timeoutButtons"));
         debugWindow.getLogIrcCheckBox().setSelected(client.settings.getBoolean("debugLogIrc"));
-        updateLiveStreamsDialog();
-        
-        windowStateManager.loadWindowStates();
-        windowStateManager.setAttachedWindowsEnabled(client.settings.getBoolean("attachedWindows"));
+        updateLiveStreamsDialog(); 
         
         // Set window maximized state
         if (client.settings.getBoolean("maximized")) {
@@ -1028,6 +1042,7 @@ public class MainGui extends JFrame implements Runnable {
      * Puts the updated state of the windows/dialogs/popouts into the settings.
      */
     public void saveWindowStates() {
+        userInfoDialog.aboutToSaveSettings();
         windowStateManager.saveWindowStates();
         client.settings.putList("popoutAttributes", channels.getPopoutAttributes());
     }
@@ -1267,25 +1282,13 @@ public class MainGui extends JFrame implements Runnable {
             } // Get token Dialog
             else if (event.getSource() == tokenGetDialog.getCloseButton()) {
                 tokenGetDialogClosed();
-            } //-----------------
-            // Userinfo Dialog
-            //-----------------
-            else if (userInfoDialog.getCommand(source) != null) {
-                CustomCommand command = userInfoDialog.getCommand(source);
-                User user = userInfoDialog.getUser();
-                String nick = user.getName();
-                String reason = userInfoDialog.getBanReason();
-                if (!reason.isEmpty()) {
-                    reason = " "+reason;
-                }
-                Parameters parameters = Parameters.create(nick+reason);
-                parameters.put("msg-id", userInfoDialog.getMsgId());
-                parameters.put("target-msg-id", userInfoDialog.getTargetMsgId());
-                parameters.put("automod-msg-id", userInfoDialog.getAutoModMsgId());
-                client.anonCustomCommand(user.getRoom(), command, parameters);
             }
         }
         
+    }
+    
+    public void anonCustomCommand(Room room, CustomCommand command, Parameters parameters) {
+        client.anonCustomCommand(room, command, parameters);
     }
 
     private class DebugCheckboxListener implements ItemListener {
@@ -1957,11 +1960,8 @@ public class MainGui extends JFrame implements Runnable {
             else if (e.getActionCommand().equals("copyBadgeType")) {
                 MiscUtil.copyToClipboard(usericon.badgeType.toString());
             }
-            else if (e.getActionCommand().equals("addUsericonOfBadgeType")) {
-                getSettingsDialog().showSettings("addUsericonOfBadgeType", usericon.badgeType.toString());
-            }
-            else if (e.getActionCommand().equals("addUsericonOfBadgeTypeId")) {
-                getSettingsDialog().showSettings("addUsericonOfBadgeType", usericon.badgeType.id);
+            else if (e.getActionCommand().startsWith("addUsericonOfBadgeType")) {
+                getSettingsDialog().showSettings(e.getActionCommand(), usericon);
             }
             else if (e.getActionCommand().equals("badgeImage")) {
                 UrlOpener.openUrlPrompt(getActiveWindow(), usericon.url.toString(), true);
@@ -2076,7 +2076,7 @@ public class MainGui extends JFrame implements Runnable {
     }
     
     public java.util.List<Usericon> getUsericonData() {
-        return client.usericonManager.getData();
+        return client.usericonManager.getCustomData();
     }
     
     public Set<String> getTwitchBadgeTypes() {
@@ -2084,7 +2084,7 @@ public class MainGui extends JFrame implements Runnable {
     }
     
     public void setUsericonData(java.util.List<Usericon> data) {
-        client.usericonManager.setData(data);
+        client.usericonManager.setCustomData(data);
     }
     
     public java.util.List<Notification> getNotificationData() {
@@ -2246,7 +2246,7 @@ public class MainGui extends JFrame implements Runnable {
      * @param msgId 
      */
     public void openUserInfoDialog(User user, String msgId, String autoModMsgId) {
-        windowStateManager.setWindowPosition(userInfoDialog, getActiveWindow());
+        windowStateManager.setWindowPosition(userInfoDialog.getDummyWindow(), getActiveWindow());
         userInfoDialog.show(getActiveWindow(), user, msgId, autoModMsgId, client.getUsername());
     }
     
@@ -2623,7 +2623,7 @@ public class MainGui extends JFrame implements Runnable {
                     showNotification("[Status] "+Helper.toValidChannel(channel),
                             "Test Notification (this would pop up when a stream status changes)",
                             Color.BLACK, Color.WHITE, channel);
-            }
+                }
             }
         });
     }
@@ -2791,36 +2791,49 @@ public class MainGui extends JFrame implements Runnable {
     public void printSubscriberMessage(final User user,
             final String text, final String message, final int months,
             final String emotes) {
-        SwingUtilities.invokeLater(new Runnable() {
+        SwingUtilities.invokeLater(() -> {
+            Emoticons.TagEmotes tagEmotes = Emoticons.parseEmotesTag(emotes);
+            SubscriberMessage m = new SubscriberMessage(user, text, message, months, tagEmotes, null);
 
-            @Override
-            public void run() {
-                // Prepare, check ignore
-                String fullMessage;
-                if (StringUtil.isNullOrEmpty(message)) {
-                    fullMessage = "[Notification] "+text;
-                } else {
-                    fullMessage = String.format("[Notification] %s [%s]", text, message);
-                }
-                
-                // Chat window
-                if (!checkInfoIgnore(fullMessage)) {
-                    Emoticons.TagEmotes tagEmotes = Emoticons.parseEmotesTag(emotes);
-                    SubscriberMessage m = new SubscriberMessage(user, text, message, months, tagEmotes, null);
-                    channels.getChannel(user.getRoom()).printMessage(m);
-                    notificationManager.newSubscriber(user, text, message);
-                } else {
-                    ignoredMessages.addInfoMessage(user.getRoom().getDisplayName(), fullMessage);
-                }
-
-                // Chatlog/User Info
-                client.chatLog.info(user.getRoom().getFilename(), fullMessage);
-                if (!user.getName().isEmpty()) {
-                    user.addSub(message != null ? processMessage(message) : "", text);
-                    updateUserInfoDialog(user);
-                }
+            boolean printed = printUsernotice(m);
+            if (printed) {
+                notificationManager.newSubscriber(user, text, message);
             }
         });
+    }
+    
+    public void printUsernotice(final String type, final User user, final String text,
+            final String message, final String emotes) {
+        SwingUtilities.invokeLater(() -> {
+            Emoticons.TagEmotes tagEmotes = Emoticons.parseEmotesTag(emotes);
+            UserNotice m = new UserNotice(type, user, text, message, tagEmotes, null);
+            printUsernotice(m);
+        });
+    }
+    
+    private boolean printUsernotice(UserNotice m) {
+        boolean ignored = checkInfoIgnore(m.fullMessage);
+        if (!ignored) {
+            channels.getChannel(m.user.getRoom()).printMessage(m);
+        } else {
+            ignoredMessages.addInfoMessage(m.user.getRoom().getDisplayName(), m.fullMessage);
+        }
+        
+        // Chatlog / User Dialog
+        client.chatLog.info(m.user.getRoom().getFilename(), m.fullMessage);
+        
+        // Only add if not dummy user (dummy user possibly not used anymore)
+        if (!m.user.getName().isEmpty()) {
+            String message = m.attachedMessage != null ? processMessage(m.attachedMessage) : "";
+            String text = m.text;
+            if (m instanceof SubscriberMessage) {
+                m.user.addSub(message, text);
+            } else {
+                m.user.addInfo(message, text);
+            }
+            updateUserInfoDialog(m.user);
+        }
+        return !ignored;
     }
     
     /**
